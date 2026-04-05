@@ -1,0 +1,5 @@
+fal-client
+httpx
+pillow
+python-dotenv
+anthropic
