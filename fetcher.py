@@ -5,7 +5,7 @@ Uses httpx async client for non-blocking network requests.
 
 import httpx
 
-from config import CITIES_API, PRODUCT_API
+from config import CITIES_API, ENRICHED_FEED_API, PRODUCT_API
 
 
 async def fetch_cities(product_type: str) -> list[dict]:
@@ -75,5 +75,36 @@ async def fetch_products(
     for product in products:
         product.setdefault("city_name", city_name)
         product.setdefault("country_name", country_name)
+
+    return products
+
+
+async def fetch_enriched_feed(
+    product_types: str = "tour,holiday,cruise,yacht",
+) -> list[dict]:
+    """
+    Fetch products from the enriched feed API.
+    Returns products with all_image_links parsed from comma-separated
+    string into a proper list of URL strings.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            ENRICHED_FEED_API,
+            params={"format": "json", "types": product_types},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    products: list[dict] = data if isinstance(data, list) else data.get("products", data.get("data", []))
+
+    # Parse all_image_links: API returns comma-separated string, not array
+    for product in products:
+        raw_links = product.get("all_image_links", "")
+        if isinstance(raw_links, str) and raw_links:
+            product["all_image_links"] = [
+                url.strip() for url in raw_links.split(",") if url.strip()
+            ]
+        elif not isinstance(raw_links, list):
+            product["all_image_links"] = []
 
     return products

@@ -79,7 +79,7 @@ def _load_logo(img_w: int) -> Image.Image:
 
 # ── Extract content from plan ─────────────────────────────────────────
 
-def _slide_content(slide_number: int, content_plan: dict, price: str) -> dict:
+def _slide_content(slide_number: int, content_plan: dict, price: str, normal_price: str = "") -> dict:
     for slide in content_plan.get("slides", []):
         if slide.get("slide_number") == slide_number:
             result = {
@@ -90,6 +90,13 @@ def _slide_content(slide_number: int, content_plan: dict, price: str) -> dict:
             }
             if slide_number == 5 and price:
                 result["price"] = price
+                if normal_price:
+                    result["normal_price"] = normal_price
+                # Remove detail bullets that duplicate the price badge
+                result["details"] = [
+                    d for d in result["details"]
+                    if "from" not in d.lower() or price.split()[-1] not in d
+                ]
             return result
     return {"headline": "", "subline": "", "details": [], "alignment": "left"}
 
@@ -103,6 +110,7 @@ def apply_watermark(
     slide_number: int,
     content_plan: dict,
     price: str = "",
+    normal_price: str = "",
 ) -> str | None:
     try:
         base = Image.open(source_path).convert("RGBA")
@@ -111,7 +119,7 @@ def apply_watermark(
         overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        content = _slide_content(slide_number, content_plan, price)
+        content = _slide_content(slide_number, content_plan, price, normal_price)
         headline = content.get("headline", "")
         subline = content.get("subline", "")
         details = content.get("details", [])[:6]
@@ -123,6 +131,8 @@ def apply_watermark(
         panel_pct = 0.40 if details else 0.30
         if slide_number == 5:
             panel_pct = 0.45
+            if normal_price:  # extra room for discount row
+                panel_pct = 0.55
         panel_h = int(H * panel_pct)
         panel_top = H - panel_h
 
@@ -143,19 +153,83 @@ def apply_watermark(
         # ── 3. Build text top-down inside panel ──
         cursor_y = panel_top + int(panel_h * 0.08)
 
-        # -- Price badge (slide 5 — aligned) --
+        # -- Price badge + discount (slide 5) --
         if slide_number == 5 and content.get("price"):
+            has_discount = bool(content.get("normal_price"))
+
+            # If discount exists, show strikethrough original price + "X% OFF" as one centered row
+            if has_discount:
+                np_text = content["normal_price"]
+                np_font = _fit_text(draw, np_text, inner_w, bold=False, ideal=int(W * 0.032))
+                np_w, np_h = _measure(draw, np_text, np_font)
+
+                # Calculate discount percentage
+                disc_text = ""
+                disc_font = _get_font(bold=True, size=int(W * 0.026))
+                disc_w, disc_h, disc_bp = 0, 0, int(W * 0.012)
+                try:
+                    np_val = float("".join(c for c in content["normal_price"] if c in "0123456789."))
+                    sp_val = float("".join(c for c in content["price"] if c in "0123456789."))
+                    if np_val > sp_val > 0:
+                        pct = int(round((1 - sp_val / np_val) * 100))
+                        if pct > 0:
+                            disc_text = f"{pct}% OFF"
+                            disc_w, disc_h = _measure(draw, disc_text, disc_font)
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+                # Total row width: strikethrough price + gap + discount pill
+                gap = int(W * 0.025)
+                pill_w = disc_w + disc_bp * 2 if disc_text else 0
+                pill_h = disc_h + disc_bp * 2 if disc_text else 0
+                total_row_w = np_w + (gap + pill_w if disc_text else 0)
+
+                # Center the entire row
+                row_x = (W - total_row_w) // 2
+                row_h = max(np_h, pill_h)
+
+                # Draw strikethrough price (vertically centered in row)
+                np_y = cursor_y + (row_h - np_h) // 2
+                draw.text((row_x, np_y), np_text, font=np_font, fill=(180, 180, 180))
+                strike_y = np_y + np_h // 2
+                draw.line(
+                    [(row_x - 2, strike_y), (row_x + np_w + 2, strike_y)],
+                    fill=(255, 80, 80), width=2,
+                )
+
+                # Draw discount pill (vertically centered in row)
+                if disc_text:
+                    pill_x = row_x + np_w + gap
+                    pill_y = cursor_y + (row_h - pill_h) // 2
+                    draw.rounded_rectangle(
+                        [pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
+                        radius=8, fill=(220, 40, 40, 230),
+                    )
+                    # Center text inside pill with anchor
+                    draw.text(
+                        (pill_x + pill_w // 2, pill_y + pill_h // 2),
+                        disc_text, font=disc_font, fill=(255, 255, 255), anchor="mm",
+                    )
+
+                cursor_y += row_h + int(panel_h * 0.03)
+
+            # Sale price badge (black)
             price_text = f"From {content['price']}"
             pr_font = _fit_text(draw, price_text, inner_w, bold=True, ideal=int(W * 0.045))
             pr_w, pr_h = _measure(draw, price_text, pr_font)
-            bp = 10
-            badge_x = _align_x(pr_w + bp * 2, pad_x, inner_w, align)
+            bp_x = int(W * 0.03)    # ~p-2 horizontal padding
+            bp_y = int(W * 0.015)   # ~p-2 vertical padding
+            badge_w = pr_w + bp_x * 2
+            badge_h = pr_h + bp_y * 2
+            badge_x = (W - badge_w) // 2
             draw.rounded_rectangle(
-                [badge_x, cursor_y, badge_x + pr_w + bp * 2, cursor_y + pr_h + bp * 2],
-                radius=8, fill=(232, 119, 34, 240),
+                [badge_x, cursor_y, badge_x + badge_w, cursor_y + badge_h],
+                radius=10, fill=(15, 15, 15, 240),
             )
-            draw.text((badge_x + bp, cursor_y + bp), price_text, font=pr_font, fill=(255, 255, 255))
-            cursor_y += pr_h + bp * 2 + int(panel_h * 0.05)
+            cx = badge_x + badge_w // 2
+            cy = cursor_y + badge_h // 2
+            draw.text((cx, cy), price_text, font=pr_font, fill=(255, 255, 255), anchor="mm")
+            cursor_y += badge_h + int(panel_h * 0.05)
 
         # -- Headline (aligned) --
         if headline:
@@ -183,20 +257,29 @@ def apply_watermark(
             )
             cursor_y += int(panel_h * 0.04)
 
-        # -- Detail bullets (aligned) --
+        # -- Detail bullets (block-aligned) --
+        # All bullets share ONE x position so they left-align as a group.
+        # For "center" mode, the group itself is centered based on the widest bullet.
         if details:
             det_font = _fit_text(
                 draw, max(details, key=len), inner_w - 20,
                 bold=False, ideal=int(W * 0.032),
             )
+            # Find the widest bullet to determine block x position
+            max_bw = 0
+            for item in details:
+                bw, _ = _measure(draw, f"  {item}", det_font)
+                if bw > max_bw:
+                    max_bw = bw
+            block_x = _align_x(max_bw, pad_x, inner_w, align)
+
             for item in details:
                 bullet = f"  {item}"
-                bw, det_h = _measure(draw, bullet, det_font)
+                _, det_h = _measure(draw, bullet, det_font)
                 if cursor_y + det_h > logo_y - 5:
                     break
-                bx = _align_x(bw, pad_x, inner_w, align)
                 draw.text(
-                    (bx, cursor_y), bullet, font=det_font,
+                    (block_x, cursor_y), bullet, font=det_font,
                     fill=(200, 200, 200, 230),
                 )
                 cursor_y += det_h + int(panel_h * 0.025)

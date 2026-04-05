@@ -17,6 +17,10 @@ OUTPUT_DIR: str = "output"
 PRODUCT_API: str = "https://data-projects-flax.vercel.app/api/all-products"
 CITIES_API: str = "https://data-projects-flax.vercel.app/api/available-cities"
 
+# Enriched feed API — returns products with real image URLs and rich metadata
+ENRICHED_FEED_API: str = "https://data-projects-flax.vercel.app/api/enriched-feed"
+ENRICHED_PRODUCT_TYPES: str = "tour,holiday,cruise,yacht"
+
 # FAL AI model identifiers — each generates a different style
 MODELS: dict[str, str] = {
     "ideogram": "fal-ai/ideogram/v3",
